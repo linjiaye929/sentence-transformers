@@ -299,6 +299,59 @@ def test_semantic_search_faiss_drops_padded_indices(corpus_precision: str, resco
 
 
 @skip_without_faiss
+@pytest.mark.parametrize("corpus_precision", ["float32", "ubinary", "uint8"])
+@pytest.mark.parametrize("rescore", [True, False])
+@pytest.mark.parametrize("reuse_index", [True, False])
+@pytest.mark.parametrize("output_index", [True, False])
+@pytest.mark.parametrize("exact", [True, False])
+def test_semantic_search_faiss_empty_queries(
+    corpus_precision: str, rescore: bool, reuse_index: bool, output_index: bool, exact: bool
+) -> None:
+    """A filtered query batch may be empty, but its corpus index must remain usable."""
+    corpus = _corpus(3, corpus_precision)
+    kwargs = {
+        "corpus_precision": corpus_precision,
+        "rescore": rescore,
+        "exact": exact,
+        "top_k": 5,
+        "calibration_embeddings": CALIBRATION,
+    }
+    expected, _, original_index = semantic_search_faiss(QUERIES, corpus_embeddings=corpus, output_index=True, **kwargs)
+    corpus_kwargs = {"corpus_index": original_index} if reuse_index else {"corpus_embeddings": corpus}
+
+    outputs = semantic_search_faiss(QUERIES[:0], output_index=output_index, **corpus_kwargs, **kwargs)
+
+    assert len(outputs) == (3 if output_index else 2)
+    assert outputs[0] == []
+    assert isinstance(outputs[1], float)
+    assert outputs[1] >= 0
+    if output_index:
+        index = outputs[2]
+        assert index.ntotal == len(corpus)
+        if reuse_index:
+            assert index is original_index
+        results, _ = semantic_search_faiss(QUERIES, corpus_index=index, **kwargs)
+        assert results == expected
+
+
+@skip_without_faiss
+@pytest.mark.parametrize("corpus_precision", ["int8", "binary", "float16"])
+def test_semantic_search_faiss_empty_queries_reject_unsupported_precision(corpus_precision: str) -> None:
+    with pytest.raises(ValueError, match="corpus_precision"):
+        semantic_search_faiss(QUERIES[:0], corpus_embeddings=_corpus(3, "uint8"), corpus_precision=corpus_precision)
+
+
+@skip_without_faiss
+def test_semantic_search_faiss_empty_queries_validate_corpus_arguments() -> None:
+    import faiss
+
+    with pytest.raises(ValueError, match="Either corpus_embeddings or corpus_index"):
+        semantic_search_faiss(QUERIES[:0])
+    with pytest.raises(ValueError, match="Only corpus_embeddings or corpus_index"):
+        semantic_search_faiss(QUERIES[:0], corpus_embeddings=_corpus(3, "float32"), corpus_index=faiss.IndexFlatIP(16))
+
+
+@skip_without_faiss
 @pytest.mark.parametrize("rescore", [True, False])
 def test_semantic_search_faiss_empty_corpus(rescore: bool) -> None:
     """An empty corpus yields empty result lists rather than phantom hits."""
